@@ -1,3 +1,6 @@
+# Usage:
+# LD_PRELOAD=/full/path/i965_batchbuffer_log_all.so execute command
+
 CXX ?= g++
 BATCHBUFFER_LOGGER_INSTALL_PATH ?= /opt/mesa.instrumentation
 
@@ -5,7 +8,7 @@ LOGGER_INC = $(BATCHBUFFER_LOGGER_INSTALL_PATH)/include
 LOGGER_LIB_DIR = $(BATCHBUFFER_LOGGER_INSTALL_PATH)/lib
 
 CXXFLAGS = -g -Wall -I$(LOGGER_INC) -std=c++11
-LIBS = -L$(LOGGER_LIB_DIR) -li965_batchbuffer_logger
+LIBS = -L$(LOGGER_LIB_DIR) -li965_batchbuffer_logger -Wl,-z,defs
 
 SRCS = i965_batchbuffer_log_all.cpp
 OBJS = $(patsubst %.cpp, build/%.o, $(SRCS))

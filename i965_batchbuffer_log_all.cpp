@@ -482,10 +482,7 @@ egl_dlsym(const char *symbol)
     if (logger_app) {                                              \
       logger_app->pre_call(logger_app, frame_count, #name, #name); \
     }                                                              \
-    std::printf("Call function "#name" at %p\n", fptr);            \
-    std::fflush(stdout);                                           \
     return_value = fptr arg_list;                                  \
-    std::cout << "Return: " << return_value << "\n";               \
     if (logger_app) {                                              \
       logger_app->post_call(logger_app, frame_count);              \
     }                                                              \
@@ -519,7 +516,6 @@ gl_function(const char *name)
   const unsigned int sz = sizeof(every_function) / sizeof(every_function[0]);
   for (unsigned int i = 0; i < sz; ++i) {
     if (std::strcmp(name, every_function[i].m_name) == 0) {
-      std::printf("Found function %s at %p\n", name, every_function[i].m_function);
       return every_function[i].m_function;
     }
   }
@@ -556,7 +552,6 @@ glXSwapBuffers(void *dpy, GLXDrawable drawable)
    }
 
    ++frame_count;
-   std::printf("GLX: frame_count = %d\n", frame_count);
 }
 
 extern "C"
@@ -591,7 +586,6 @@ eglSwapBuffers(void *dpy, void *surface)
    }
 
    ++frame_count;
-   std::printf("EGL: frame_count = %d\n", frame_count);
    return R;
 }
 

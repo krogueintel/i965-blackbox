@@ -10,13 +10,13 @@ LOGGER_LIB_DIR = $(BATCHBUFFER_LOGGER_INSTALL_PATH)/lib
 CXXFLAGS = -g -Wall -I$(LOGGER_INC) -std=c++11
 LIBS = -L$(LOGGER_LIB_DIR) -li965_batchbuffer_logger -Wl,-z,defs
 
-SRCS = i965_batchbuffer_log_all.cpp
+SRCS = i965-blackbox.cpp
 OBJS = $(patsubst %.cpp, build/%.o, $(SRCS))
 
 GEN_SRCS = generate_stuff.cpp
 
-i965_batchbuffer_log_all.so: $(OBJS)
-	$(CXX) -shared -Wl,-soname,i965_batchbuffer_log_all -o i965_batchbuffer_log_all.so $(OBJS) $(LIBS)
+i965-blackbox.cpp.so: $(OBJS)
+	$(CXX) -shared -Wl,-soname,i965-blackbox -o i965-blackbox.so $(OBJS) $(LIBS)
 
 generate_stuff: build/generate_stuff.o
 	$(CXX) $(CXXFLAGS) -o generate_stuff build/generate_stuff.o -ltinyxml
@@ -24,7 +24,7 @@ generate_stuff: build/generate_stuff.o
 build/function_macros.inc: generate_stuff
 	./generate_stuff gl.xml > $@
 
-build/i965_batchbuffer_log_all.o: build/function_macros.inc
+build/i965-blackbox.o: build/function_macros.inc
 
 build/%.o: %.cpp
 	@mkdir -p $(dir $@)

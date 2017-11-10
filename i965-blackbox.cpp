@@ -13,12 +13,6 @@
 #include "i965_batchbuffer_logger_app.h"
 #include "i965_batchbuffer_logger_output.h"
 
-/* imlemented by i965_batchbuffer_logger.so,
- * but symbol not listed in i965_batchbuffer_logger_app.h
- */
-extern "C" struct i965_batchbuffer_logger_app*
-i965_batchbuffer_logger_app_acquire(void);
-
 /* Interception Notes:
  *
  * 1. For each GL/GLES function glFoo, we 

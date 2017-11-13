@@ -13,7 +13,27 @@
 #include "i965_batchbuffer_logger_app.h"
 #include "i965_batchbuffer_logger_output.h"
 
-/* Interception Notes:
+/*
+ * Environmental variables that control output:
+ *  - I965_BLACKBOX_FILENAME provides filename prefix for output, defualt
+ *                           value given by macro DEFAULT_FILENAME
+ *
+ *  - I965_BLACKBOX_MAX_FILESIZE is number of bytes before a new file is
+ *                               started in the log, default value is given
+ *                                by macro DEFAULT_MAX_FILESIZE
+ *
+ *  - I965_BLACKBOX_MAX_FRAMES_PERFILE is number of frames before a new file
+ *                                     is started in the log, default value
+ *                                      is given by macro DEFAULT_MAX_FRAMES_PER_FILE
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ * Interception Notes:
  *
  * 1. For each GL/GLES function glFoo, we 
  *  a. define the function glFoo, this makes the pre and post
@@ -55,11 +75,14 @@
  *    iii. fallback to whatever real_dlsym() returns
  */
 
-// file size of 16MB
-#define FILE_SIZE (16 * 1024 * 1024)
+// default filename prefix
+#define DEFAULT_FILENAME "i965_blackbox_log"
 
-// so many frames per dumping
-#define NUM_FRAMES 100
+// default max file size of 16MB before starting new file
+#define DEFAULT_MAX_FILESIZE (16 * 1024 * 1024)
+
+// default max number of frames before starting new file
+#define DEFAULT_MAX_FRAMES_PER_FILE 100
 
 
 namespace {
@@ -69,6 +92,23 @@ struct function_list
   const char *m_name;
   void *m_function;
 };
+
+template<typename T>
+T
+read_from_environment(const char *env, T default_value)
+{
+  const char *tmp;
+  T return_value(default_value);
+
+  tmp = std::getenv(env);
+  if (tmp != nullptr) {
+     std::string str(tmp);
+     std::istringstream istr(tmp);
+     istr >> return_value;
+  }
+
+  return return_value;
+}
   
 class Block
 {
@@ -143,10 +183,11 @@ public:
 
   static
   struct i965_batchbuffer_logger_session
-  start_session(struct i965_batchbuffer_logger_app *app)
+  start_session(struct i965_batchbuffer_logger_app *app,
+                long max_filesize)
   {
     struct i965_batchbuffer_logger_session_params params;
-    params.client_data = new Session();
+    params.client_data = new Session(max_filesize);
     params.write = &Session::write_fcn;
     params.close = &Session::close_fcn;
     params.pre_execbuffer2_ioctl = &Session::pre_execbuffer2_ioctl_fcn;
@@ -154,7 +195,7 @@ public:
   }
   
 private:
-  Session();
+  Session(long max_filesize);
 
 void
   start_new_file(void);
@@ -167,6 +208,7 @@ void
                 const void *name, uint32_t name_length,
                 const void *value, uint32_t value_length);
 
+  long m_max_filesize;
   unsigned int m_count;
   /* Because we split a single session across many files,
    * we need to reset the block to zero on ending a file
@@ -183,30 +225,26 @@ void
 //////////////////////////////////////////
 // Session methods
 Session::
-Session(void):
-   m_count(0),
-   m_file(nullptr)
+Session(long max_filesize):
+  m_max_filesize(max_filesize),
+  m_count(0),
+  m_file(nullptr)
 {
-   static unsigned int count(0);
-   const char *filename_prefix;
-   std::ostringstream str;
+  static unsigned int count(0);
+  std::string filename_prefix;
+  std::ostringstream str;
 
-   filename_prefix = getenv("BATCHBUFFER_LOG_PREFIX");
-   if (filename_prefix == NULL)
-     {
-       filename_prefix = "batchbuffer_log";
-     }
+  filename_prefix = read_from_environment<std::string>("I965_BLACKBOX_FILENAME", DEFAULT_FILENAME);
+  str << filename_prefix << "-" << ++count;
+  m_prefix = str.str();
 
-   str << filename_prefix << "-" << ++count;
-   m_prefix = str.str();
-
-   start_new_file();
+  start_new_file();
 }
 
 Session::
 ~Session()
 {
-   close_file();
+  close_file();
 }
 
 void
@@ -288,7 +326,7 @@ pre_execbuffer2_ioctl_fcn(void *pthis, unsigned int id)
   Session *p;
   p = static_cast<Session*>(pthis);
 
-  if (p->m_file && std::ftell(p->m_file) > FILE_SIZE)
+  if (p->m_file && std::ftell(p->m_file) > p->m_max_filesize)
     {
       p->start_new_file();
     }
@@ -329,6 +367,8 @@ write_fcn(void *pthis,
 // and so it begins.
 static struct i965_batchbuffer_logger_app *logger_app = NULL;
 static struct i965_batchbuffer_logger_session logger_session = { .opaque = NULL };
+static long max_filesize;
+static unsigned int numframes_per_file;
 static unsigned int frame_count = 0;
 static unsigned int api_count = 0;
 
@@ -612,10 +652,10 @@ glXSwapBuffers(void *dpy, GLXDrawable drawable)
    if (logger_app)
      {
        logger_app->post_call(logger_app, api_count);
-       if (frame_count > NUM_FRAMES)
+       if (frame_count > numframes_per_file)
          {
            logger_app->end_session(logger_app, logger_session);
-           logger_session = Session::start_session(logger_app);
+           logger_session = Session::start_session(logger_app, max_filesize);
          }
      }
 
@@ -646,10 +686,10 @@ eglSwapBuffers(void *dpy, void *surface)
    if (logger_app)
      {
        logger_app->post_call(logger_app, api_count);
-       if (frame_count > NUM_FRAMES)
+       if (frame_count > numframes_per_file)
          {
            logger_app->end_session(logger_app, logger_session);
-           logger_session = Session::start_session(logger_app);
+           logger_session = Session::start_session(logger_app, max_filesize);
          }
      }
 
@@ -752,15 +792,14 @@ static
 void
 start_session(void)
 {
-   const char *filename_prefix;
+   max_filesize = read_from_environment<long>("I965_BLACKBOX_MAX_FILESIZE",
+                                              DEFAULT_MAX_FILESIZE);
 
-   filename_prefix = getenv("BATCHBUFFER_LOG_PREFIX");
-   if (filename_prefix == NULL) {
-      filename_prefix = "batchbuffer_log";
-   }
+   numframes_per_file = read_from_environment<long>("I965_BLACKBOX_MAX_FRAMES_PERFILE",
+                                                    DEFAULT_MAX_FRAMES_PER_FILE);
 
    logger_app = i965_batchbuffer_logger_app_acquire();
-   logger_session = Session::start_session(logger_app);
+   logger_session = Session::start_session(logger_app, max_filesize);
 }
 
 __attribute__((destructor))

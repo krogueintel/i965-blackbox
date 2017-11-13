@@ -123,10 +123,7 @@ private:
 
 class Session
 {
-public:
-  explicit
-  Session();
-  
+public:  
   ~Session();
 
   static
@@ -138,9 +135,28 @@ public:
 
   static
   void
-  close_fcn(void *pthis);
-private:
+  pre_execbuffer2_ioctl_fcn(void *pthis, unsigned int id);
+  
+  static
   void
+  close_fcn(void *pthis);
+
+  static
+  struct i965_batchbuffer_logger_session
+  start_session(struct i965_batchbuffer_logger_app *app)
+  {
+    struct i965_batchbuffer_logger_session_params params;
+    params.client_data = new Session();
+    params.write = &Session::write_fcn;
+    params.close = &Session::close_fcn;
+    params.pre_execbuffer2_ioctl = &Session::pre_execbuffer2_ioctl_fcn;
+    return app->begin_session(app, &params);
+  }
+  
+private:
+  Session();
+
+void
   start_new_file(void);
 
   void
@@ -265,30 +281,21 @@ close_fcn(void *pthis)
    delete p;
 }
 
-static
-bool
-is_begin_execbuffer2(const void *name, uint32_t name_length)
+void
+Session::
+pre_execbuffer2_ioctl_fcn(void *pthis, unsigned int id)
 {
-   static const char *src = "drmIoctl(execbuffer2)";
-   static const uint32_t src_length = std::strlen(src);
+  Session *p;
+  p = static_cast<Session*>(pthis);
 
-   const char *n;
-   n = static_cast<const char*>(name);
-
-   if (name_length != src_length)
-     {
-       return false;
-     }
-
-   for(int i = 0, endi = std::strlen(src); i < endi; ++i)
-     {
-       if (n[i] != src[i])
-         {
-           return false;
-         }
-     }
-
-   return true;
+  if (p->m_file && std::ftell(p->m_file) > FILE_SIZE)
+    {
+      p->start_new_file();
+    }
+  else if (p->m_file)
+    {
+      std::fflush(p->m_file);
+    }
 }
 
 void
@@ -300,13 +307,6 @@ write_fcn(void *pthis,
 {
    Session *p;
    p = static_cast<Session*>(pthis);
-
-   if (tp == I965_BATCHBUFFER_LOGGER_MESSAGE_BLOCK_BEGIN
-       && is_begin_execbuffer2(name, name_length)
-       && std::ftell(p->m_file) > FILE_SIZE)
-     {
-       p->start_new_file();
-     }
 
    switch (tp)
      {
@@ -614,13 +614,8 @@ glXSwapBuffers(void *dpy, GLXDrawable drawable)
        logger_app->post_call(logger_app, api_count);
        if (frame_count > NUM_FRAMES)
          {
-           struct i965_batchbuffer_logger_session_params params;
-
            logger_app->end_session(logger_app, logger_session);
-           params.client_data = new Session();
-           params.write = &Session::write_fcn;
-           params.close = &Session::close_fcn;
-           logger_session = logger_app->begin_session(logger_app, &params);
+           logger_session = Session::start_session(logger_app);
          }
      }
 
@@ -653,13 +648,8 @@ eglSwapBuffers(void *dpy, void *surface)
        logger_app->post_call(logger_app, api_count);
        if (frame_count > NUM_FRAMES)
          {
-           struct i965_batchbuffer_logger_session_params params;
-
            logger_app->end_session(logger_app, logger_session);
-           params.client_data = new Session();
-           params.write = &Session::write_fcn;
-           params.close = &Session::close_fcn;
-           logger_session = logger_app->begin_session(logger_app, &params);
+           logger_session = Session::start_session(logger_app);
          }
      }
 
@@ -769,13 +759,8 @@ start_session(void)
       filename_prefix = "batchbuffer_log";
    }
 
-   struct i965_batchbuffer_logger_session_params params;
-   params.client_data = new Session();
-   params.write = &Session::write_fcn;
-   params.close = &Session::close_fcn;
-
    logger_app = i965_batchbuffer_logger_app_acquire();
-   logger_session = logger_app->begin_session(logger_app, &params);
+   logger_session = Session::start_session(logger_app);
 }
 
 __attribute__((destructor))

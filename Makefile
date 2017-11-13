@@ -31,5 +31,5 @@ build/%.o: %.cpp
 	$(CXX) $(CXXFLAGS) -fPIC -c $< -o $@
 
 clean:
-	rm -fr build i965_batchbuffer_log_all.so generate_stuff
+	rm -fr build i965-blackbox.so generate_stuff
 

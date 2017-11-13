@@ -1,9 +1,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include <iostream>
 #include <sstream>
 #include <vector>
+#include <list>
 #include <assert.h>
 #include <dlfcn.h>
 #include <stdint.h>
@@ -16,22 +16,22 @@
 /*
  * Environmental variables that control output:
  *  - I965_BLACKBOX_FILENAME provides filename prefix for output, defualt
- *                           value given by macro DEFAULT_FILENAME
+ *                           value given by macro DEFAULT_FILENAME.
  *
  *  - I965_BLACKBOX_MAX_FILESIZE is number of bytes before a new file is
  *                               started in the log, default value is given
- *                                by macro DEFAULT_MAX_FILESIZE
+ *                               by macro DEFAULT_MAX_FILESIZE
  *
  *  - I965_BLACKBOX_MAX_FRAMES_PERFILE is number of frames before a new file
  *                                     is started in the log, default value
- *                                      is given by macro DEFAULT_MAX_FRAMES_PER_FILE
+ *                                     is given by macro DEFAULT_MAX_FRAMES_PER_FILE
  *
- *
- *
- *
- *
- *
- *
+ *  - I965_BLACKBOX_NUM_MOST_RECENT_KEEP if non-zero, gives the number of most recent
+ *                                       execbuffer2 calls to keep as dedicated files
+ *                                       (usually for the purpose of debugging a GPU
+ *                                       hang). When the value is non-zero only these
+ *                                       are kept instead of the log of the entire
+ *                                       application.
  *
  * Interception Notes:
  *
@@ -99,7 +99,7 @@ read_from_environment(const char *env, T default_value)
 {
   const char *tmp;
   T return_value(default_value);
-
+  
   tmp = std::getenv(env);
   if (tmp != nullptr) {
      std::string str(tmp);
@@ -183,11 +183,12 @@ public:
 
   static
   struct i965_batchbuffer_logger_session
-  start_session(struct i965_batchbuffer_logger_app *app,
+  start_session(unsigned int most_recent_ioctl_max,
+                struct i965_batchbuffer_logger_app *app,
                 long max_filesize)
   {
     struct i965_batchbuffer_logger_session_params params;
-    params.client_data = new Session(max_filesize);
+    params.client_data = new Session(most_recent_ioctl_max, max_filesize);
     params.write = &Session::write_fcn;
     params.close = &Session::close_fcn;
     params.pre_execbuffer2_ioctl = &Session::pre_execbuffer2_ioctl_fcn;
@@ -195,7 +196,8 @@ public:
   }
   
 private:
-  Session(long max_filesize);
+  Session(unsigned int most_recent_ioctl_max,
+          long max_filesize);
 
 void
   start_new_file(void);
@@ -208,8 +210,13 @@ void
                 const void *name, uint32_t name_length,
                 const void *value, uint32_t value_length);
 
+  unsigned int m_most_recent_ioctl_max;
   long m_max_filesize;
   unsigned int m_count;
+
+  unsigned int m_most_recent_ioctl_file_cnt;
+  std::list<std::string> m_most_recent_ioctl_files;
+  
   /* Because we split a single session across many files,
    * we need to reset the block to zero on ending a file
    * and restore the block structure at the start of a
@@ -217,6 +224,7 @@ void
    */
   std::vector<Block> m_block_stack;
   std::string m_prefix;
+  std::string m_filename;
   std::FILE *m_file;
 };
 
@@ -225,19 +233,28 @@ void
 //////////////////////////////////////////
 // Session methods
 Session::
-Session(long max_filesize):
+Session(unsigned int most_recent_ioctl_max,
+        long max_filesize):
+  m_most_recent_ioctl_max(most_recent_ioctl_max),
   m_max_filesize(max_filesize),
   m_count(0),
+  m_most_recent_ioctl_file_cnt(0),
   m_file(nullptr)
 {
   static unsigned int count(0);
   std::string filename_prefix;
-  std::ostringstream str;
 
   filename_prefix = read_from_environment<std::string>("I965_BLACKBOX_FILENAME", DEFAULT_FILENAME);
-  str << filename_prefix << "-" << ++count;
-  m_prefix = str.str();
-
+  if (m_most_recent_ioctl_max == 0)
+    {
+      std::ostringstream str;
+      str << filename_prefix << "-" << ++count;
+      m_prefix = str.str();
+    }
+  else
+    {
+      m_prefix = filename_prefix;
+    }
   start_new_file();
 }
 
@@ -262,6 +279,22 @@ close_file(void)
     }
   std::fclose(m_file);
   m_file = nullptr;
+
+  if (m_most_recent_ioctl_max > 0)
+    {
+      while (m_most_recent_ioctl_file_cnt >= m_most_recent_ioctl_max)
+        {
+          std::string file_to_delete;
+
+          file_to_delete = m_most_recent_ioctl_files.front();
+          std::remove(file_to_delete.c_str());
+          m_most_recent_ioctl_files.pop_front();
+          --m_most_recent_ioctl_file_cnt;
+        }
+      m_most_recent_ioctl_files.push_back(m_filename);
+      ++m_most_recent_ioctl_file_cnt;
+      m_filename.clear();
+    }
 }
 
 void
@@ -272,7 +305,8 @@ start_new_file(void)
 
    std::ostringstream str;
    str << m_prefix << "." << ++m_count;
-   m_file = std::fopen(str.str().c_str(), "w");
+   m_filename = str.str();
+   m_file = std::fopen(m_filename.c_str(), "w");
    for (auto iter = m_block_stack.begin(); iter != m_block_stack.end(); ++iter)
      {
        write_to_file(I965_BATCHBUFFER_LOGGER_MESSAGE_BLOCK_BEGIN,
@@ -326,11 +360,20 @@ pre_execbuffer2_ioctl_fcn(void *pthis, unsigned int id)
   Session *p;
   p = static_cast<Session*>(pthis);
 
-  if (p->m_file && std::ftell(p->m_file) > p->m_max_filesize)
+  if (!p->m_file)
+    {
+      return;
+    }
+
+  if (p->m_most_recent_ioctl_max > 0)
     {
       p->start_new_file();
     }
-  else if (p->m_file)
+  else if (std::ftell(p->m_file) > p->m_max_filesize)
+    {
+      p->start_new_file();
+    }
+  else
     {
       std::fflush(p->m_file);
     }
@@ -367,7 +410,8 @@ write_fcn(void *pthis,
 // and so it begins.
 static struct i965_batchbuffer_logger_app *logger_app = NULL;
 static struct i965_batchbuffer_logger_session logger_session = { .opaque = NULL };
-static long max_filesize;
+static unsigned int most_recent_ioctl_max = 0;
+static long max_filesize = 0;
 static unsigned int numframes_per_file;
 static unsigned int frame_count = 0;
 static unsigned int api_count = 0;
@@ -652,10 +696,10 @@ glXSwapBuffers(void *dpy, GLXDrawable drawable)
    if (logger_app)
      {
        logger_app->post_call(logger_app, api_count);
-       if (frame_count > numframes_per_file)
+       if (frame_count > numframes_per_file && most_recent_ioctl_max == 0)
          {
            logger_app->end_session(logger_app, logger_session);
-           logger_session = Session::start_session(logger_app, max_filesize);
+           logger_session = Session::start_session(most_recent_ioctl_max, logger_app, max_filesize);
          }
      }
 
@@ -686,10 +730,10 @@ eglSwapBuffers(void *dpy, void *surface)
    if (logger_app)
      {
        logger_app->post_call(logger_app, api_count);
-       if (frame_count > numframes_per_file)
+       if (frame_count > numframes_per_file && most_recent_ioctl_max == 0)
          {
            logger_app->end_session(logger_app, logger_session);
-           logger_session = Session::start_session(logger_app, max_filesize);
+           logger_session = Session::start_session(most_recent_ioctl_max, logger_app, max_filesize);
          }
      }
 
@@ -797,9 +841,10 @@ start_session(void)
 
    numframes_per_file = read_from_environment<long>("I965_BLACKBOX_MAX_FRAMES_PERFILE",
                                                     DEFAULT_MAX_FRAMES_PER_FILE);
+   most_recent_ioctl_max = read_from_environment<unsigned int>("I965_BLACKBOX_NUM_MOST_RECENT_KEEP", 0);
 
    logger_app = i965_batchbuffer_logger_app_acquire();
-   logger_session = Session::start_session(logger_app, max_filesize);
+   logger_session = Session::start_session(most_recent_ioctl_max, logger_app, max_filesize);
 }
 
 __attribute__((destructor))

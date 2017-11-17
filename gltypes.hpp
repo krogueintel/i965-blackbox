@@ -44,3 +44,9 @@ typedef void *GLeglClientBufferEXT;
 // types needed for X
 typedef unsigned long XID;
 typedef XID GLXDrawable;
+
+// types for EGL
+typedef unsigned int EGLBoolean;
+typedef void *EGLDisplay;
+typedef void *EGLSurface;
+typedef int32_t EGLint;

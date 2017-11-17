@@ -599,9 +599,15 @@ void*
 fetch_function(const char *name)
 {
   if (prefer_gl_sym)
-    return gl_dlsym(name);
+    {
+      printf("Fetch %s with gl_dlsym\n", name);
+      return gl_dlsym(name);
+    }
   else
-    return gles_dlsym(name);        
+    {
+      printf("Fetch %s with gles_dlsym\n", name);
+      return gles_dlsym(name);        
+    }
 }
 
 #define FUNCTION_ENTRY(name, type_arg_list, arg_list) \
@@ -675,7 +681,13 @@ fetch_function(const char *name)
   }
 
 #include "build/function_macros.inc"
-  
+
+extern "C" void glXSwapBuffers(void *dpy, GLXDrawable drawable);
+extern "C" EGLBoolean eglInitialize(void *dpy, int32_t *major, int32_t *minor);
+extern "C" unsigned int eglSwapBuffers(void *dpy, void *surface);
+extern "C" void* glXGetProcAddress(const char *name);
+extern "C" void* glXGetProcAddressARB(const char *name);
+extern "C" void* eglGetProcAddress(const char *name);
 
 struct function_list every_function[] =
   {
@@ -684,6 +696,12 @@ struct function_list every_function[] =
 #define FUNCTION_ENTRY(name, type_arg_list, arg_list) { #name, (void*)name },
 #define FUNCTION_ENTRY_RET(type, name, type_arg_list, arg_list) { #name, (void*)name },
 #include "build/function_macros.inc"
+    FUNCTION_ENTRY(glXSwapBuffers, X, X)
+    FUNCTION_ENTRY(eglInitialize, X, X)
+    FUNCTION_ENTRY(eglSwapBuffers, X, X)
+    FUNCTION_ENTRY(glXGetProcAddress, X, X)
+    FUNCTION_ENTRY(glXGetProcAddressARB, X, X)
+    FUNCTION_ENTRY(eglGetProcAddress, X, X)
   };
 
 static
@@ -734,10 +752,26 @@ glXSwapBuffers(void *dpy, GLXDrawable drawable)
 }
 
 extern "C"
-unsigned int
-eglSwapBuffers(void *dpy, void *surface)
+EGLBoolean
+eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor)
 {
-   typedef unsigned int (*fptr_type)(void*, void*);
+  typedef EGLBoolean (*fptr_type)(EGLDisplay, EGLint*, EGLint*);
+  static fptr_type fptr = nullptr;
+
+  prefer_gl_sym = false;
+  if (fptr == nullptr)
+     {
+       static void *handle = nullptr;
+       fptr = (fptr_type)dlsym_lib_style("eglInitialize", "libEGL.so", &handle);
+     }
+  return fptr(dpy, major, minor);
+}
+
+extern "C"
+EGLBoolean
+eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
+{
+   typedef unsigned int (*fptr_type)(EGLDisplay, EGLSurface);
    static fptr_type fptr = nullptr;
    unsigned int R;
 
@@ -772,11 +806,6 @@ extern "C"
 void*
 glXGetProcAddress(const char *name)
 {
-   if (std::strcmp(name, "glXSwapBuffers") == 0)
-     {
-       return (void*)glXSwapBuffers;
-     }
-
    void *q;
    q = gl_function(name);
    if (q)
@@ -801,10 +830,7 @@ extern "C"
 void*
 eglGetProcAddress(const char *name)
 {
-   if (std::strcmp(name, "eglSwapBuffers") == 0)
-     {
-       return (void*)eglSwapBuffers;
-     }
+   prefer_gl_sym = false;
 
    void *q;
    q = gl_function(name);
@@ -826,27 +852,6 @@ extern "C"
 void*
 dlsym(void *handle, const char *symbol)
 {
-   if (std::strcmp(symbol, "glXGetProcAddress") == 0 ||
-       std::strcmp(symbol, "glXGetProcAddressARB") == 0)
-     {
-       return (void*)glXGetProcAddress;
-     }
-
-   if (std::strcmp(symbol, "glXSwapBuffers") == 0)
-     {
-       return (void*)glXSwapBuffers;
-     }
-
-   if (std::strcmp(symbol, "eglGetProcAddress") == 0)
-     {
-       return (void*)eglGetProcAddress;
-     }
-
-   if (std::strcmp(symbol, "eglSwapBuffers") == 0)
-     {
-       return (void*)eglSwapBuffers;
-     }
-
    void *q;
    q = gl_function(symbol);
    if (q)

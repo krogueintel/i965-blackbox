@@ -36,6 +36,39 @@
 #include "i965_batchbuffer_logger_app.h"
 #include "i965_batchbuffer_logger_output.h"
 
+/* functions implemented in GNU libc that we can use to get
+ * symbols without directly invoking dlopen/dlsym.
+ */
+extern "C" void *__libc_dlopen_mode(const char *filename, int flag);
+extern "C" void *__libc_dlsym(void *handle, const char *symbol);
+
+/* calls the "real" dlsym() by calling the __libc_ functions
+ * to get the dlsym symbol in libdl.so.
+ */
+static
+void*
+real_dlsym(void *handle, const char *symbol)
+{
+   typedef void* (*fptr_type)(void*, const char*);
+   static fptr_type fptr  = nullptr;
+   if (!fptr)
+     {
+       void *libdl;
+       libdl =  __libc_dlopen_mode("libdl.so", RTLD_LOCAL | RTLD_NOW);
+       if (libdl)
+         {
+           fptr = (fptr_type)__libc_dlsym(libdl, "dlsym");
+         }
+
+       if (!fptr)
+         {
+           assert(!"Warning: unable to get dlsym unnaturally");
+           return nullptr;
+         }
+     }
+   return fptr(handle, symbol);
+}
+
 /*
  * Environmental variables that control output:
  *  - I965_BLACKBOX_FILENAME provides filename prefix for output, defualt
@@ -56,6 +89,15 @@
  *                                       are kept instead of the log of the entire
  *                                       application.
  *
+ * - I965_BLACKBOX_GL_LIB name of GL .so to use to load GL symbols;
+ *                        if not set, use the value "libGL.so"
+ *
+ * - I965_BLACKBOX_GLES_LIB name of GLES .so to use to load GLES2/3 symbols;
+ *                          if not set, use the value "libGLESv2.so"
+ *
+ * - I965_BLACKBOX_EGL_LIB name of EGL .so to use to load EGL symbols;
+ *                         if not set, use the value "libEGL.so"
+ *
  * Interception Notes:
  *  The methodology for interception of GL/GLES API calls
  *  is taken from apitrace (https://github.com/apitrace/apitrace).
@@ -73,15 +115,15 @@
  *    EGL usage is detected.
  * 
  * 3. There are 3 "high-level getters"
- *  a. gl_sym() for fetching GL functions first via glXGetProcAddress/glXGetProcAddressARB,
- *     (grabbed via the via dlsym_lib_style() with "libGL.so") and if they both fail
- *     then to use dlsym_lib_style() with "libGL.so"
+ *  a. gl_sym() for fetching GL functions first via glXGetProcAddress
+ *     and glXGetProcAddressARB, (grabbed via the via dlsym_lib_style())
+ *     and if they both fail then to use dlsym_lib_style()
  *  b. egl_sym() for fetching EGL functions first via eglGetProcAddress,
- *     (grabbed via the via dlsym_lib_style() with "libGL.so") and if it 
- *     fails then to use dlsym_lib_style() with "libEGL.so"
+ *     (grabbed via the via dlsym_lib_style()) and if it 
+ *     fails then to use dlsym_lib_style()
  *  c. gles_sym() for fetching GL functions first via eglGetProcAddress,
- *     (grabbed via the via dlsym_lib_style() with "libGL.so") and if it 
- *     fails then to use dlsym_lib_style() with "libGLESv2.so"
+ *     (grabbed via the via dlsym_lib_style()) and if it 
+ *     fails then to use dlsym_lib_style()
  *
  * 4. We have special implementations of
  *   a. glXGetProcAddress/glXGetProcAddressARB.
@@ -185,6 +227,45 @@ public:
 private:
   std::vector<uint8_t> m_name;
   std::vector<uint8_t> m_value;
+};
+
+class FunctionFetcher
+{
+public:
+  void*
+  dlsym_lib_style(const char *symbol);
+
+  static
+  FunctionFetcher&
+  gl(void)
+  {
+    static FunctionFetcher r("I965_BLACKBOX_GL_LIB", "libGL.so");
+    return r;
+  }
+
+  static
+  FunctionFetcher&
+  gles(void)
+  {
+    static FunctionFetcher r("I965_BLACKBOX_GLES_LIB", "libGLESv2.so");
+    return r;
+  }
+
+  static
+  FunctionFetcher&
+  egl(void)
+  {
+    static FunctionFetcher r("I965_BLACKBOX_EGL_LIB", "libEGL.so");
+    return r;
+  }
+  
+private:
+  FunctionFetcher(const char *environ_var,
+                  const char *fallback_lib);
+
+  void *m_handle;
+  const char *m_name;
+  const char *m_fallback;
 };
 
 class Session
@@ -432,6 +513,45 @@ write_fcn(void *pthis,
    p->write_to_file(tp, name, name_length, value, value_length);
 }
 
+////////////////////////////////////////
+// FunctionFetcher symbols
+FunctionFetcher::
+FunctionFetcher(const char *environ_var,
+                const char *fallback_lib):
+  m_handle(nullptr),
+  m_fallback(fallback_lib)
+{
+  m_name = std::getenv(environ_var);
+  if (!m_name)
+    {
+      m_name = m_fallback;
+    }
+}
+
+void*
+FunctionFetcher::
+dlsym_lib_style(const char *symbol)
+{
+  void *return_value;
+  if (!m_handle)
+    {
+      return_value = real_dlsym(RTLD_NEXT, symbol);
+       if (symbol)
+         {
+           m_handle = RTLD_NEXT;
+           return return_value;
+         }
+
+       m_handle = __libc_dlopen_mode(m_name, RTLD_GLOBAL | RTLD_LAZY | RTLD_DEEPBIND);
+       if (!m_handle)
+         {
+           m_handle = __libc_dlopen_mode(m_fallback, RTLD_GLOBAL | RTLD_LAZY | RTLD_DEEPBIND);
+         }
+    }
+
+  return real_dlsym(m_handle, symbol);
+}
+
 /////////////////////////////////////////////
 // and so it begins.
 static struct i965_batchbuffer_logger_app *logger_app = NULL;
@@ -444,60 +564,10 @@ static unsigned int api_count = 0;
 
 static bool prefer_gl_sym = true;
 
-/* functions implemented in GNU libc that we can use to get
- * symbols without directly invoking dlopen/dlsym.
- */
-extern "C" void *__libc_dlopen_mode(const char *filename, int flag);
-extern "C" void *__libc_dlsym(void *handle, const char *symbol);
-
-/* calls the "real" dlsym() by calling the __libc_ functions */
-static
-void*
-real_dlsym(void *handle, const char *symbol)
-{
-   typedef void* (*fptr_type)(void*, const char*);
-   static fptr_type fptr  = nullptr;
-   if (!fptr)
-     {
-       void *libdl;
-       libdl =  __libc_dlopen_mode("libdl.so", RTLD_LOCAL | RTLD_NOW);
-       if (libdl)
-         {
-           fptr = (fptr_type)__libc_dlsym(libdl, "dlsym");
-         }
-
-       if (!fptr)
-         {
-           assert(!"Warning: unable to get dlsym unnaturally");
-           return nullptr;
-         }
-     }
-   return fptr(handle, symbol);
-}
-
 /* Grab a symbol, if handle is not initialized, then
  * intialize it with RTLD_NEXT (if it works) or a
  * handle for the named .so.
  */
-static
-void*
-dlsym_lib_style(const char *symbol, const char *lib, void **handle)
-{
-   void *return_value;
-
-   if (!*handle)
-     {
-       return_value = real_dlsym(RTLD_NEXT, symbol);
-       if (symbol)
-         {
-           *handle = RTLD_NEXT;
-           return return_value;
-         }
-       *handle = __libc_dlopen_mode(lib, RTLD_GLOBAL | RTLD_LAZY | RTLD_DEEPBIND);
-     }
-   return real_dlsym(*handle, symbol);
-}
-
 static
 void*
 gl_dlsym(const char *symbol)
@@ -505,17 +575,16 @@ gl_dlsym(const char *symbol)
   typedef void* (*fptr_type)(const char*);
   static fptr_type fptr1 = nullptr;
   static fptr_type fptr2 = nullptr;
-  static void *handle = nullptr;
   void *return_value = nullptr;
 
   if (!fptr1)
     {
-      fptr1 = (fptr_type)dlsym_lib_style("glXGetProcAddress", "libGL.so", &handle);
+      fptr1 = (fptr_type)FunctionFetcher::gl().dlsym_lib_style("glXGetProcAddress");
     }
 
   if (!fptr2)
     {
-      fptr2 = (fptr_type)dlsym_lib_style("glXGetProcAddressARB", "libGL.so", &handle);
+      fptr2 = (fptr_type)FunctionFetcher::gl().dlsym_lib_style("glXGetProcAddressARB");
     }
 
   if (fptr1)
@@ -536,7 +605,7 @@ gl_dlsym(const char *symbol)
         }
     }
 
-  return dlsym_lib_style(symbol, "libGL.so", &handle);
+  return FunctionFetcher::gl().dlsym_lib_style(symbol);
 }
 
 static
@@ -545,13 +614,12 @@ gles_dlsym(const char *symbol)
 {
   typedef void* (*fptr_type)(const char*);
   static fptr_type fptr = nullptr;
-  static void *egl_handle = nullptr;
-  static void *gles_handle = nullptr;
+  
   void *return_value = nullptr;
 
   if (!fptr)
     {
-      fptr = (fptr_type)dlsym_lib_style("eglGetProcAddress", "libEGL.so", &egl_handle);
+      fptr = (fptr_type)FunctionFetcher::egl().dlsym_lib_style("eglGetProcAddress");
     }
 
   if (fptr)
@@ -561,7 +629,7 @@ gles_dlsym(const char *symbol)
 
   if (!return_value)
     {
-      return_value = dlsym_lib_style(symbol, "libGLESv2.so", &gles_handle);
+      return_value = FunctionFetcher::gles().dlsym_lib_style(symbol);
     }
 
   return return_value;
@@ -573,12 +641,11 @@ egl_dlsym(const char *symbol)
 {
   typedef void* (*fptr_type)(const char*);
   static fptr_type fptr = nullptr;
-  static void *handle = nullptr;
   void *return_value = nullptr;
 
   if (!fptr)
     {
-      fptr = (fptr_type)dlsym_lib_style("eglGetProcAddress", "libEGL.so", &handle);
+      fptr = (fptr_type)FunctionFetcher::egl().dlsym_lib_style("eglGetProcAddress");
     }
 
   if (fptr)
@@ -588,7 +655,7 @@ egl_dlsym(const char *symbol)
 
   if (!return_value)
     {
-      return_value = dlsym_lib_style(symbol, "libEGL.so", &handle);
+      return_value = FunctionFetcher::egl().dlsym_lib_style(symbol);
     }
 
   return return_value;
@@ -600,12 +667,12 @@ fetch_function(const char *name)
 {
   if (prefer_gl_sym)
     {
-      printf("Fetch %s with gl_dlsym\n", name);
+      std::printf("Use gl_dlsym to fetch %s\n", name);
       return gl_dlsym(name);
     }
   else
     {
-      printf("Fetch %s with gles_dlsym\n", name);
+      std::printf("Use gles_dlsym to fetch %s\n", name);
       return gles_dlsym(name);        
     }
 }
@@ -761,8 +828,7 @@ eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor)
   prefer_gl_sym = false;
   if (fptr == nullptr)
      {
-       static void *handle = nullptr;
-       fptr = (fptr_type)dlsym_lib_style("eglInitialize", "libEGL.so", &handle);
+       fptr = (fptr_type) FunctionFetcher::egl().dlsym_lib_style("eglInitialize");
      }
   return fptr(dpy, major, minor);
 }

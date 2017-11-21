@@ -155,7 +155,6 @@ done
 
 [ -z $1 ] && show_help
 
-libdir=$(dirname "$0")
-
+libdir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 export LD_PRELOAD=${libdir}/i965-blackbox.so:$LD_PRELOAD
 exec -- "$@"

@@ -464,12 +464,12 @@ fetch_function(const char *name)
 {
   if (prefer_gl_sym)
     {
-      std::printf("Use gl_dlsym to fetch %s\n", name);
+      std::printf("i965-blackbox: Use gl_dlsym to fetch %s\n", name);
       return gl_dlsym(name);
     }
   else
     {
-      std::printf("Use gles_dlsym to fetch %s\n", name);
+      std::printf("i965-blackbox: Use gles_dlsym to fetch %s\n", name);
       return gles_dlsym(name);        
     }
 }
@@ -732,11 +732,19 @@ start_session(void)
 {
    max_filesize = read_from_environment<long>("I965_BLACKBOX_MAX_FILESIZE",
                                               DEFAULT_MAX_FILESIZE);
+   std::printf("i965-blackbox: file size set to %ld\n", max_filesize);
 
    numframes_per_file = read_from_environment<long>("I965_BLACKBOX_MAX_FRAMES_PERFILE",
                                                     DEFAULT_MAX_FRAMES_PER_FILE);
-   most_recent_ioctl_max = read_from_environment<unsigned int>("I965_BLACKBOX_NUM_MOST_RECENT_KEEP", 0);
+   std::printf("i965-blackbox: number frames to file set to %u\n", numframes_per_file);
 
+   most_recent_ioctl_max = read_from_environment<unsigned int>("I965_BLACKBOX_NUM_MOST_RECENT_KEEP", 0);
+   if (most_recent_ioctl_max > 0)
+     {
+       std::printf("i965-blackbox: keeping only %u most recent batchbuffer logs\n",
+                   most_recent_ioctl_max);
+     }
+   
    logger_app = i965_batchbuffer_logger_app_acquire();
    logger_session = Session::start_session(most_recent_ioctl_max, logger_app, max_filesize);
 }

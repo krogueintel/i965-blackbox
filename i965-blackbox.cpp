@@ -291,6 +291,7 @@ Session(unsigned int most_recent_ioctl_max,
     {
       m_prefix = filename_prefix;
     }
+  std::printf("i965-blackbox: Start new session \"%s\"\n", m_prefix.c_str());
   start_new_file();
 }
 
@@ -313,6 +314,8 @@ close_file(void)
     {
       write_to_file(I965_BATCHBUFFER_LOGGER_MESSAGE_BLOCK_END, nullptr, 0, nullptr, 0);
     }
+  std::printf("i965-blackbox: close file \"%s\"of size %ld\n",
+              m_filename.c_str(), std::ftell(m_file));
   std::fclose(m_file);
   m_file = nullptr;
 
@@ -343,6 +346,7 @@ start_new_file(void)
    str << m_prefix << "." << ++m_count;
    m_filename = str.str();
    m_file = std::fopen(m_filename.c_str(), "w");
+   std::printf("i965-blackbox: Start new file \"%s\"\n", m_filename.c_str());
    for (auto iter = m_block_stack.begin(); iter != m_block_stack.end(); ++iter)
      {
        write_to_file(I965_BATCHBUFFER_LOGGER_MESSAGE_BLOCK_BEGIN,
@@ -405,7 +409,7 @@ pre_execbuffer2_ioctl_fcn(void *pthis, unsigned int id)
     {
       p->start_new_file();
     }
-  else if (std::ftell(p->m_file) > p->m_max_filesize)
+  else if (p->m_max_filesize > 0 && std::ftell(p->m_file) > p->m_max_filesize)
     {
       p->start_new_file();
     }
@@ -583,6 +587,15 @@ gl_function(const char *name)
   return nullptr;
 }
 
+static
+bool
+frame_should_start_new_session(void)
+{
+  return numframes_per_file > 0
+    && frame_count > numframes_per_file
+    && most_recent_ioctl_max == 0;
+}
+
 extern "C"
 void
 glXSwapBuffers(void *dpy, GLXDrawable drawable)
@@ -604,8 +617,9 @@ glXSwapBuffers(void *dpy, GLXDrawable drawable)
    if (logger_app)
      {
        logger_app->post_call(logger_app, api_count);
-       if (frame_count > numframes_per_file && most_recent_ioctl_max == 0)
+       if (frame_should_start_new_session())
          {
+           frame_count = 0;
            logger_app->end_session(logger_app, logger_session);
            logger_session = Session::start_session(most_recent_ioctl_max, logger_app, max_filesize);
          }
@@ -653,8 +667,9 @@ eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
    if (logger_app)
      {
        logger_app->post_call(logger_app, api_count);
-       if (frame_count > numframes_per_file && most_recent_ioctl_max == 0)
+       if (frame_should_start_new_session())
          {
+           frame_count = 0;
            logger_app->end_session(logger_app, logger_session);
            logger_session = Session::start_session(most_recent_ioctl_max, logger_app, max_filesize);
          }
@@ -730,15 +745,18 @@ static
 void
 start_session(void)
 {
-   max_filesize = read_from_environment<long>("I965_BLACKBOX_MAX_FILESIZE",
-                                              DEFAULT_MAX_FILESIZE);
+   max_filesize =
+     read_from_environment<long>("I965_BLACKBOX_MAX_FILESIZE",
+                                 DEFAULT_MAX_FILESIZE);
    std::printf("i965-blackbox: file size set to %ld\n", max_filesize);
 
-   numframes_per_file = read_from_environment<long>("I965_BLACKBOX_MAX_FRAMES_PERFILE",
-                                                    DEFAULT_MAX_FRAMES_PER_FILE);
+   numframes_per_file =
+     read_from_environment<unsigned int>("I965_BLACKBOX_MAX_FRAMES_PERFILE",
+                                         DEFAULT_MAX_FRAMES_PER_FILE);
    std::printf("i965-blackbox: number frames to file set to %u\n", numframes_per_file);
 
-   most_recent_ioctl_max = read_from_environment<unsigned int>("I965_BLACKBOX_NUM_MOST_RECENT_KEEP", 0);
+   most_recent_ioctl_max =
+     read_from_environment<unsigned int>("I965_BLACKBOX_NUM_MOST_RECENT_KEEP", 0);
    if (most_recent_ioctl_max > 0)
      {
        std::printf("i965-blackbox: keeping only %u most recent batchbuffer logs\n",
@@ -755,6 +773,7 @@ void
 end_session(void)
 {
    if (logger_app) {
+      std::printf("i965-blackbox: shutdown.\n");
       logger_app->end_session(logger_app, logger_session);
       logger_app->release_app(logger_app);
       logger_app = nullptr;

@@ -155,7 +155,7 @@ done
 
 [ -z $1 ] && show_help
 
-libdir=.
+libdir=$(dirname "$0")
 
 export LD_PRELOAD=${libdir}/i965-blackbox.so:$LD_PRELOAD
 exec -- "$@"

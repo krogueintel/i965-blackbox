@@ -47,17 +47,23 @@ namespace
       void *return_value;
       if (!m_handle)
         {
-          return_value = real_dlsym(RTLD_NEXT, symbol);
-          if (return_value)
-            {
-              m_handle = RTLD_NEXT;
-              return return_value;
-            }
-
           m_handle = __libc_dlopen_mode(m_name, RTLD_GLOBAL | RTLD_LAZY | RTLD_DEEPBIND);
           if (!m_handle)
             {
               m_handle = __libc_dlopen_mode(m_fallback, RTLD_GLOBAL | RTLD_LAZY | RTLD_DEEPBIND);
+              m_name = m_fallback;
+            }
+
+          if (m_handle)
+            {
+              std::printf("i965-blackbox: Using \"%s\" for %s\n", m_name, m_environ);
+            }
+          else
+            {
+              return_value = real_dlsym(RTLD_NEXT, symbol);
+              std::printf("i965-blackbox: Using value RTLD_NEXT for %s\n", m_environ);
+              m_handle = RTLD_NEXT;
+              return return_value;
             }
         }
 
@@ -92,9 +98,10 @@ namespace
     FunctionFetcher(const char *environ_var,
                     const char *fallback_lib):
       m_handle(nullptr),
-      m_fallback(fallback_lib)
+      m_fallback(fallback_lib),
+      m_environ(environ_var)
     {
-      m_name = std::getenv(environ_var);
+      m_name = std::getenv(m_environ);
       if (!m_name)
         {
           m_name = m_fallback;
@@ -104,6 +111,7 @@ namespace
     void *m_handle;
     const char *m_name;
     const char *m_fallback;
+    const char *m_environ;
   };
 }
 

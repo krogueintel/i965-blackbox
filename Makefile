@@ -15,7 +15,7 @@ OBJS = $(patsubst %.cpp, build/%.o, $(SRCS))
 
 GEN_SRCS = generate_stuff.cpp
 
-i965-blackbox.cpp.so: $(OBJS)
+i965-blackbox.so: $(OBJS)
 	$(CXX) -shared -Wl,-soname,i965-blackbox -o i965-blackbox.so $(OBJS) $(LIBS)
 
 generate_stuff: build/generate_stuff.o

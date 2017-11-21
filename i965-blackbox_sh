@@ -1,0 +1,161 @@
+#!/bin/bash
+# -*- mode: sh -*-
+
+function show_help() {
+    cat <<EOF
+Usage: i965_blackbox [OPTION]... [--] COMMAND ARGUMENTS
+
+Run COMMAND with ARGUMENTS where COMMAND is an application using
+the i965_batchbuffer_logger_app interface to provide API calling
+information to hook into a batchbuffer log.
+
+ -d level  Select batchbuffer decode level, where level is one of
+           the following.
+             no_decode : do not decode batchbuffer contents
+             instruction_decode : only decode the name of each GPU
+                                  command
+             instruction_details_decode: decode the name and contents
+                                         of each GPU command
+
+ -before-ioctl Emit batchbuffer log data BEFORE sending execbuffer2 ioctl
+               commands to the kernel
+
+ -send-object-capture For those execbuffer2 ioctl commands with I915_EXEC_BATCH_FIRST
+                      set, add an EXEC_OBJECT_CAPTURE exec_object2 whose contents
+                      is a string indicating the execbuffer2 ioctl ID
+
+ -emit-total-stats filename Emit -total- counts of GPU commands sent to
+                            GPU to named file
+
+ -shader-file  instead of placing the assembly of the shaders directly
+               in the log, save the assembly of each shader -binary-
+               to a file
+
+ -r level  Select the level to record in the log the relocation data,
+           where level is one of the following.
+             print_reloc_gem_gpu_updates : log reloc information
+             print_reloc_nothing : do not log reloc information
+
+ -pciid pciid Give a hexadecimal value of the PCI ID value for
+              the GPU the BatchbufferLogger to decode for; this
+              value is used if and only if the driver fails to
+              tell the BatchbufferLogger a valid PCI ID value to
+              use
+
+ -keep-most-recent N Each execbuffer2 ioctl is given its own file
+                          and delete all but the N most recent
+                          files while running
+
+ -fileprefix PREFIX Specify the prefix to use for generated files
+
+ -filesize SIZE Specify file size (in bytes) before starting a
+                new file at the next execbuffer2 ioctl; ignored
+                if -keep-most-recent is active; default value is
+                16777216 (which is 16 MB)
+ 
+ -numframes NUM Specify the number of frames before starting a
+                new file at the next execbuffer2 ioctl; ignored
+                if -keep-most-recent is active default value is
+                100
+
+ -gl-lib GL specify the .so from which to load GL/GLX symbols
+            (default is libGL.so)
+
+ -gles-lib GLES specify the .so from which to load GLES symbols
+                (default is libGLESv2.so)
+
+ -egl-lib EGL specify the .so from which to load EGL symbols
+              (default is libGL.so)
+
+ --help    Display this help message and exit
+
+EOF
+
+    exit 0
+}
+
+function set_var() {
+    export $1=$2
+}
+
+while true; do
+    case "$1" in
+        -d)
+            set_var "I965_DECODE_LEVEL" "$2"
+            shift 2
+            ;;
+        -before-ioctl)
+            set_var "I965_DECODE_BEFORE_IOCTL" "1"
+            shift 1
+            ;;
+        -send-object-capture)
+            set_var "I965_DECODE_BEFORE_IOCTL" "1"
+            set_var "I965_EMIT_CAPTURE_EXECOBJ_BATCHBUFFER_IDENTIFIER" "1"
+            shift 1
+            ;;
+        -emit-total-stats)
+            set_var "I965_EMIT_TOTAL_STATS" "$2"
+            shift 2
+            ;;
+        -r)
+            set_var "I965_PRINT_RELOC_LEVEL" "$2"
+            shift 2
+            ;;
+        -pciid)
+            set_var "I965_PCI_ID" "$2"
+            shift 2
+            ;;
+        -shader-file)
+            set_var "I965_DECODE_SHADERS" "0"
+            shift 1
+            ;;
+        -h)
+            show_help
+            ;;
+        --help)
+            show_help
+            ;;
+        -keep-most-recent)
+            set_var "I965_BLACKBOX_NUM_MOST_RECENT_KEEP" "$2"
+            shift 2
+            ;;
+        -fileprefix)
+            set_var "I965_BLACKBOX_FILENAME" "$2"
+            shift 2
+            ;;
+        -filesize)
+            set_var "I965_BLACKBOX_MAX_FILESIZE" "$2"
+            shift 2
+            ;;
+        -numframes)
+            set_var "I965_BLACKBOX_MAX_FRAMES_PERFILE" "$2"
+            shift 2
+            ;;
+        -gl-lib)
+            set_var "I965_BLACKBOX_GL_LIB" "$2"
+            shift 2
+            ;;
+        -gles-lib)
+            set_var "I965_BLACKBOX_GLES_LIB" "$2"
+            shift 2
+            ;;
+        -egl-lib)
+            set_var "I965_BLACKBOX_EGL_LIB" "$2"
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            break
+            ;;
+      esac
+done
+
+[ -z $1 ] && show_help
+
+libdir=.
+
+export LD_PRELOAD=${libdir}/i965-blackbox.so:$LD_PRELOAD
+exec -- "$@"

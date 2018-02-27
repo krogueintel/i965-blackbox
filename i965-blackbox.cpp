@@ -330,8 +330,9 @@ close_file(void)
     {
       write_to_file(I965_BATCHBUFFER_LOGGER_MESSAGE_BLOCK_END, nullptr, 0, nullptr, 0);
     }
-  std::printf("i965-blackbox: close file \"%s\"of size %ld\n",
+  std::printf("i965-blackbox: close file \"%s\" of size %ld\n",
               m_filename.c_str(), std::ftell(m_file));
+  std::fflush(stdout);
   std::fclose(m_file);
   m_file = nullptr;
 
@@ -363,6 +364,7 @@ start_new_file(void)
    m_filename = str.str();
    m_file = std::fopen(m_filename.c_str(), "w");
    std::printf("i965-blackbox: Start new file \"%s\" at api-call #%u\n", m_filename.c_str(), api_count);
+   std::fflush(stdout);
    for (auto iter = m_block_stack.begin(); iter != m_block_stack.end(); ++iter)
      {
        write_to_file(I965_BATCHBUFFER_LOGGER_MESSAGE_BLOCK_BEGIN,
@@ -433,7 +435,7 @@ pre_execbuffer2_ioctl_fcn(void *pthis, unsigned int id)
     }
   else
     {
-      std::printf("i965-blackbox: flush\"%s\"\n", p->m_filename.c_str());
+      std::printf("i965-blackbox: flush file \"%s\"\n", p->m_filename.c_str());
       std::fflush(p->m_file);
     }
 }

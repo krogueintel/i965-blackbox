@@ -120,6 +120,17 @@
 // default max number of frames before starting new file
 #define DEFAULT_MAX_FRAMES_PER_FILE 100
 
+////////////////////////////////////
+// Global vomit.
+static struct i965_batchbuffer_logger_app *logger_app = NULL;
+static struct i965_batchbuffer_logger_session logger_session = { .opaque = NULL };
+static unsigned int most_recent_ioctl_max = 0;
+static long max_filesize = 0;
+static unsigned int numframes_per_file;
+static unsigned int frame_count = 0;
+static unsigned int api_count = 0;
+static bool prefer_gl_sym = true;
+
 
 namespace {
 
@@ -212,6 +223,10 @@ public:
   static
   void
   pre_execbuffer2_ioctl_fcn(void *pthis, unsigned int id);
+
+  static
+  void
+  post_execbuffer2_ioctl_fcn(void *pthis, unsigned int id);
   
   static
   void
@@ -228,6 +243,7 @@ public:
     params.write = &Session::write_fcn;
     params.close = &Session::close_fcn;
     params.pre_execbuffer2_ioctl = &Session::pre_execbuffer2_ioctl_fcn;
+    params.post_execbuffer2_ioctl = &Session::post_execbuffer2_ioctl_fcn;
     return app->begin_session(app, &params);
   }
   
@@ -343,10 +359,10 @@ start_new_file(void)
    close_file();
 
    std::ostringstream str;
-   str << m_prefix << "." << ++m_count;
+   str << m_prefix << "." << m_count++;
    m_filename = str.str();
    m_file = std::fopen(m_filename.c_str(), "w");
-   std::printf("i965-blackbox: Start new file \"%s\"\n", m_filename.c_str());
+   std::printf("i965-blackbox: Start new file \"%s\" at api-call #%u\n", m_filename.c_str(), api_count);
    for (auto iter = m_block_stack.begin(); iter != m_block_stack.end(); ++iter)
      {
        write_to_file(I965_BATCHBUFFER_LOGGER_MESSAGE_BLOCK_BEGIN,
@@ -400,22 +416,46 @@ pre_execbuffer2_ioctl_fcn(void *pthis, unsigned int id)
   Session *p;
   p = static_cast<Session*>(pthis);
 
+  if (p->m_most_recent_ioctl_max > 0)
+    {
+      p->start_new_file();
+      return;
+    }
+
   if (!p->m_file)
     {
       return;
     }
-
-  if (p->m_most_recent_ioctl_max > 0)
-    {
-      p->start_new_file();
-    }
-  else if (p->m_max_filesize > 0 && std::ftell(p->m_file) > p->m_max_filesize)
+  
+  if (p->m_max_filesize > 0 && std::ftell(p->m_file) > p->m_max_filesize)
     {
       p->start_new_file();
     }
   else
     {
+      std::printf("i965-blackbox: flush\"%s\"\n", p->m_filename.c_str());
       std::fflush(p->m_file);
+    }
+}
+
+void
+Session::
+post_execbuffer2_ioctl_fcn(void *pthis, unsigned int id)
+{  
+  Session *p;
+  p = static_cast<Session*>(pthis);
+
+  if (p->m_file)
+    {
+      if (p->m_most_recent_ioctl_max > 0)
+        {
+          p->close_file();
+        }
+      else
+        {
+          std::printf("i965-blackbox: flush\"%s\"\n", p->m_filename.c_str());
+          std::fflush(p->m_file);
+        }
     }
 }
 
@@ -447,16 +487,7 @@ write_fcn(void *pthis,
 }
 
 /////////////////////////////////////////////
-// and so it begins.
-static struct i965_batchbuffer_logger_app *logger_app = NULL;
-static struct i965_batchbuffer_logger_session logger_session = { .opaque = NULL };
-static unsigned int most_recent_ioctl_max = 0;
-static long max_filesize = 0;
-static unsigned int numframes_per_file;
-static unsigned int frame_count = 0;
-static unsigned int api_count = 0;
-
-static bool prefer_gl_sym = true;
+// and so it begins, the global vomit.
 
 /* Grab a symbol, if handle is not initialized, then
  * intialize it with RTLD_NEXT (if it works) or a
@@ -592,7 +623,7 @@ bool
 frame_should_start_new_session(void)
 {
   return numframes_per_file > 0
-    && frame_count > numframes_per_file
+    && frame_count >= numframes_per_file
     && most_recent_ioctl_max == 0;
 }
 
@@ -738,6 +769,14 @@ dlsym(void *handle, const char *symbol)
      }
 
    return real_dlsym(handle, symbol);
+}
+
+extern "C"
+void*
+dlopen(const char *filename, int flag)
+{
+  std::printf("i965-blackbox: dlopen(\"%s\", %d)\n", filename, flag);
+  return __libc_dlopen_mode(filename, flag);
 }
 
 __attribute__((constructor))
